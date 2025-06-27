@@ -5,15 +5,13 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 
-// Dynamically import speech recognition to avoid SSR issues
-const SpeechRecognition = dynamic(() => import('react-speech-recognition').then(mod => mod.default), {
-  ssr: false
-});
-const useSpeechRecognition = dynamic(() => import('react-speech-recognition').then(mod => mod.useSpeechRecognition), {
-  ssr: false
-});
-
-const API_BASE_URL = 'http://localhost:8000';
+// Sample question suggestions
+const QUESTION_SUGGESTIONS = [
+  "What are the main topics covered in the documents?",
+  "Summarize the key findings from some policies",
+  "What is shift allowance policy?",
+  "Explain the different policies"
+];
 
 export default function ChatPage() {
   const router = useRouter();
@@ -26,10 +24,11 @@ export default function ChatPage() {
   const [mounted, setMounted] = useState(false);
   const messagesEndRef = useRef(null);
 
-  // Speech recognition - only initialize after mount
-  const [transcript, setTranscript] = useState('');
+  // Speech recognition state
   const [listening, setListening] = useState(false);
   const [browserSupportsRecognition, setBrowserSupportsRecognition] = useState(false);
+  const recognitionRef = useRef(null);
+  const recognitionTimeoutRef = useRef(null);
 
   // Handle mounting and speech recognition initialization
   useEffect(() => {
@@ -71,6 +70,18 @@ export default function ChatPage() {
       localStorage.setItem('chatPages', JSON.stringify(chatPages));
     }
   }, [chatPages, mounted]);
+
+  // Cleanup speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.abort();
+      }
+      if (recognitionTimeoutRef.current) {
+        clearTimeout(recognitionTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Don't render until mounted to avoid hydration mismatch
   if (!mounted) {
@@ -138,130 +149,146 @@ export default function ChatPage() {
     );
   };
 
-  const handleVoiceInput = async () => {
-    if (!browserSupportsRecognition) return;
-
-    if (!listening) {
-      setTranscript('');
-      setListening(true);
-      
-      try {
-        // Use the native Web Speech API for better control
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        const recognition = new SpeechRecognition();
-        
-        // Configure recognition settings
-        recognition.continuous = true; // Keep listening while user is talking
-        recognition.interimResults = true; // Show results as user speaks
-        recognition.lang = 'en-US';
-        recognition.maxAlternatives = 1;
-        
-        // Auto-stop after 10 seconds of silence or 30 seconds total
-        const maxDuration = 30000; // 30 seconds max
-        const silenceTimeout = 3000; // 3 seconds of silence
-        
-        let silenceTimer;
-        let totalTimer;
-        let finalTranscript = '';
-        
-        recognition.onstart = () => {
-          console.log('Voice recognition started');
-          // Set maximum duration timer
-          totalTimer = setTimeout(() => {
-            recognition.stop();
-          }, maxDuration);
-        };
-        
-        recognition.onresult = (event) => {
-          let interimTranscript = '';
-          
-          // Clear silence timer since user is speaking
-          if (silenceTimer) {
-            clearTimeout(silenceTimer);
-            silenceTimer = null;
-          }
-          
-          // Process all results
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript;
-            
-            if (event.results[i].isFinal) {
-              finalTranscript += transcript + ' ';
-            } else {
-              interimTranscript += transcript;
-            }
-          }
-          
-          // Update input with current transcript
-          const currentText = (finalTranscript + interimTranscript).trim();
-          setTranscript(currentText);
-          setInputValue(currentText);
-          
-          // Set silence timer after each result
-          silenceTimer = setTimeout(() => {
-            recognition.stop();
-          }, silenceTimeout);
-        };
-
-        recognition.onspeechend = () => {
-          // User stopped speaking, wait a bit then stop
-          if (silenceTimer) {
-            clearTimeout(silenceTimer);
-          }
-          silenceTimer = setTimeout(() => {
-            recognition.stop();
-          }, 1000); // 1 second delay after speech ends
-        };
-
-        recognition.onend = () => {
-          console.log('Voice recognition ended');
-          setListening(false);
-          
-          // Clean up timers
-          if (silenceTimer) {
-            clearTimeout(silenceTimer);
-            silenceTimer = null;
-          }
-          if (totalTimer) {
-            clearTimeout(totalTimer);
-            totalTimer = null;
-          }
-        };
-
-        recognition.onerror = (event) => {
-          console.error('Speech recognition error:', event.error);
-          setListening(false);
-          
-          // Clean up timers
-          if (silenceTimer) {
-            clearTimeout(silenceTimer);
-            silenceTimer = null;
-          }
-          if (totalTimer) {
-            clearTimeout(totalTimer);
-            totalTimer = null;
-          }
-          
-          // Handle specific errors
-          if (event.error === 'no-speech') {
-            console.log('No speech detected');
-          } else if (event.error === 'not-allowed') {
-            alert('Microphone access denied. Please allow microphone access to use voice input.');
-          }
-        };
-        
-        // Start recognition
-        recognition.start();
-        
-      } catch (error) {
-        console.error('Failed to start speech recognition:', error);
-        setListening(false);
-      }
-    } else {
-      // Stop listening if currently active
-      setListening(false);
-      // Note: The recognition will stop automatically via the onend event
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
     }
+    if (recognitionTimeoutRef.current) {
+      clearTimeout(recognitionTimeoutRef.current);
+      recognitionTimeoutRef.current = null;
+    }
+    setListening(false);
+  };
+
+  const handleVoiceInput = async () => {
+    if (!browserSupportsRecognition) {
+      alert('Your browser does not support speech recognition. Please try Chrome, Safari, or Edge.');
+      return;
+    }
+
+    if (listening) {
+      stopListening();
+      return;
+    }
+
+    try {
+      // Request microphone permission first
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop()); // Stop the stream immediately after permission check
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
+      
+      // Configure recognition settings for better performance
+      recognition.continuous = false; // Don't continue after user stops talking
+      recognition.interimResults = true; // Show results as user speaks
+      recognition.lang = 'en-US';
+      recognition.maxAlternatives = 1;
+
+      let finalTranscript = '';
+      let hasSpoken = false;
+
+      recognition.onstart = () => {
+        console.log('Voice recognition started');
+        setListening(true);
+        
+        // Set a maximum duration timer (15 seconds)
+        recognitionTimeoutRef.current = setTimeout(() => {
+          stopListening();
+        }, 15000);
+      };
+      
+      recognition.onresult = (event) => {
+        hasSpoken = true;
+        let interimTranscript = '';
+        
+        // Process all results
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript.trim();
+          
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+        
+        // Update input with current transcript (show interim results)
+        const currentText = (finalTranscript + interimTranscript).trim();
+        setInputValue(currentText);
+      };
+
+      recognition.onnomatch = () => {
+        console.log('No speech was recognized');
+        if (!hasSpoken) {
+          setInputValue('');
+        }
+      };
+
+      recognition.onend = () => {
+        console.log('Voice recognition ended');
+        setListening(false);
+        recognitionRef.current = null;
+        
+        if (recognitionTimeoutRef.current) {
+          clearTimeout(recognitionTimeoutRef.current);
+          recognitionTimeoutRef.current = null;
+        }
+        
+        // Clean up the final transcript
+        if (finalTranscript.trim()) {
+          setInputValue(finalTranscript.trim());
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        setListening(false);
+        recognitionRef.current = null;
+        
+        if (recognitionTimeoutRef.current) {
+          clearTimeout(recognitionTimeoutRef.current);
+          recognitionTimeoutRef.current = null;
+        }
+        
+        // Handle specific errors
+        switch (event.error) {
+          case 'no-speech':
+            if (!hasSpoken) {
+              console.log('No speech detected - keeping current input');
+            }
+            break;
+          case 'not-allowed':
+            alert('Microphone access denied. Please allow microphone access and try again.');
+            break;
+          case 'network':
+            alert('Network error occurred. Please check your internet connection.');
+            break;
+          case 'aborted':
+            console.log('Speech recognition was aborted');
+            break;
+          default:
+            console.log('Speech recognition error:', event.error);
+        }
+      };
+      
+      // Start recognition
+      recognition.start();
+      
+    } catch (error) {
+      console.error('Failed to start speech recognition:', error);
+      setListening(false);
+      if (error.name === 'NotAllowedError') {
+        alert('Microphone access denied. Please allow microphone access in your browser settings.');
+      } else {
+        alert('Failed to access microphone. Please check your browser settings.');
+      }
+    }
+  };
+
+  const handleSuggestionClick = (suggestion) => {
+    setInputValue(suggestion);
   };
 
   const sendMessage = async () => {
@@ -288,7 +315,7 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/query`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/query`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -350,11 +377,14 @@ export default function ChatPage() {
 
       <div className="flex h-screen bg-zinc-900 text-white">
         {/* Sidebar */}
-        <div className={`${sidebarOpen ? 'w-64' : 'w-0'} transition-all duration-300 bg-zinc-800 border-r border-zinc-700 flex flex-col overflow-hidden`}>
+        <div className={`${sidebarOpen ? 'w-64' : 'w-0'} transition-all duration-300 bg-black-800 border-r border-zinc-700 flex flex-col overflow-hidden`}>
           <div className="p-4 border-b border-zinc-700">
+            <h2 className="text-2xl font-bold italic text-white mb-4">
+              Policy<span className="text-blue-400">Pal</span>📝
+            </h2>
             <button
               onClick={createNewPage}
-              className="w-full bg-zinc-700 hover:bg-zinc-600 text-white p-2 rounded-lg transition-colors flex items-center justify-center gap-2"
+              className="w-full bg-sky-700 hover:bg-sky-600 text-white p-2 rounded-lg transition-colors flex items-center justify-center gap-2 font-bold"
             >
               <span>+</span>
               New Chat
@@ -362,26 +392,43 @@ export default function ChatPage() {
           </div>
           
           <div className="flex-1 overflow-y-auto p-2">
-            {chatPages.map((page) => (
+            {chatPages.length > 0 && (
+              <div className="mb-3">
+                <h3 className="text-sm font-bold text-gray-400 px-2 mb-2">Recents</h3>
+              </div>
+            )}
+            {chatPages.slice().reverse().map((page) => (
               <div
                 key={page.id}
-                className={`group flex items-center justify-between p-3 mb-2 rounded-lg cursor-pointer transition-colors ${
-                  page.id === currentPageId ? 'bg-zinc-700' : 'bg-zinc-800 hover:bg-zinc-700'
+                className={`group flex items-center justify-between p-2 mb-2 rounded-lg cursor-pointer transition-colors ${
+                  page.id === currentPageId ? 'bg-zinc-700' : 'bg-black-800 hover:bg-zinc-700'
                 }`}
                 onClick={() => selectPage(page.id)}
               >
                 <div className="flex-1 truncate">
                   <div className="text-sm font-medium truncate">{page.title}</div>
-                  <div className="text-xs text-zinc-400">
+                  {/* <div className="text-xs text-zinc-400">
                     {page.messages.length} messages
-                  </div>
+                  </div> */}
                 </div>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     deletePage(page.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400 transition-all p-1"
+                  className="
+                    opacity-0 group-hover:opacity-100 
+                    text-zinc-400 
+                    hover:text-red-400 
+                    transition-all 
+                    p-1
+                    w-8 h-8
+                    flex items-center justify-center
+                    text-xl
+                    rounded-lg
+                    hover:bg-zinc-800
+                    hover:shadow
+                  "
                 >
                   ×
                 </button>
@@ -419,9 +466,34 @@ export default function ChatPage() {
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {messages.length === 0 ? (
-              <div className="text-center text-zinc-400 mt-20">
-                <h2 className="text-2xl font-bold mb-4">What can I help with?</h2>
-                <p>Ask questions about your ingested documents</p>
+              <div className="text-center text-zinc-400">
+                <div className="mt-20 mb-8">
+                  <h2 className="text-2xl text-sky-600 font-bold mb-4">What can I help with?</h2>
+                  <p>Ask questions about our policies..😊</p>
+                </div>
+                
+                {/* Question Suggestions */}
+                <div className="max-w-4xl mx-auto">
+                  <h3 className="text-md font-medium mb-4 text-zinc-300">Tap below:</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {QUESTION_SUGGESTIONS.map((suggestion, index) => (
+                      <button
+                        key={index}
+                        onClick={() => handleSuggestionClick(suggestion)}
+                        className="text-left p-4 bg-zinc-800 hover:bg-zinc-700 rounded-lg border border-zinc-700 hover:border-zinc-600 transition-all duration-200 text-zinc-300 hover:text-white"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="text-sky-400 mt-1">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          </div>
+                          <span className="text-sm">{suggestion}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             ) : (
               messages.map((message) => (
@@ -484,13 +556,15 @@ export default function ChatPage() {
                     flex items-center justify-center
                     w-12 h-12
                     rounded-full
-                    transition-colors
+                    transition-all duration-200
                     border-2
                     ${listening
-                      ? 'bg-red-600 border-red-700 animate-pulse'
-                      : 'bg-zinc-700 border-zinc-600 hover:bg-sky-700'}
+                      ? 'bg-red-600 border-red-700 animate-pulse shadow-lg shadow-red-500/25'
+                      : 'bg-zinc-700 border-zinc-600 hover:bg-sky-700 hover:border-sky-600'}
                     text-white
                     focus:outline-none
+                    focus:ring-2
+                    focus:ring-sky-500
                   `}
                   aria-label={listening ? "Stop voice input" : "Start voice input"}
                   disabled={isLoading}

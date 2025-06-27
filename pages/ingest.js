@@ -1,10 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
-// import { configDotenv } from 'dotenv';
 
-// const process.env.API_BASE_URL = 'http://localhost:8000';
- 
 
 export default function IngestPage() {
   const router = useRouter();
@@ -74,7 +71,7 @@ export default function IngestPage() {
         formData.append('files', file);
       });
 
-      const response = await fetch(`${process.env.API_BASE_URL}/ingest`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/ingest`, {
         method: 'POST',
         body: formData,
       });
@@ -107,7 +104,7 @@ export default function IngestPage() {
 
   const checkHealth = async () => {
     try {
-      const response = await fetch(`${process.env.API_BASE_URL}/health`);
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/health`);
       const health = await response.json();
       setUploadStatus({
         type: 'info',
@@ -121,32 +118,32 @@ export default function IngestPage() {
     }
   };
 
-  const clearVectorstore = async () => {
-    if (!confirm('Are you sure you want to clear all ingested documents? This action cannot be undone.')) {
-      return;
-    }
+  // const clearVectorstore = async () => {
+  //   if (!confirm('Are you sure you want to clear all ingested documents? This action cannot be undone.')) {
+  //     return;
+  //   }
 
-    try {
-      const response = await fetch(`${process.env.API_BASE_URL}/vectorstore`, {
-        method: 'DELETE',
-      });
+  //   try {
+  //     const response = await fetch(`${NEXT_PUBLIC_API_BASE_URL}/vectorstore`, {
+  //       method: 'DELETE',
+  //     });
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+  //     if (!response.ok) {
+  //       throw new Error(`HTTP error! status: ${response.status}`);
+  //     }
 
-      const result = await response.json();
-      setUploadStatus({
-        type: 'success',
-        message: result.message
-      });
-    } catch (error) {
-      setUploadStatus({
-        type: 'error',
-        message: 'Failed to clear vectorstore.'
-      });
-    }
-  };
+  //     const result = await response.json();
+  //     setUploadStatus({
+  //       type: 'success',
+  //       message: result.message
+  //     });
+  //   } catch (error) {
+  //     setUploadStatus({
+  //       type: 'error',
+  //       message: 'Failed to clear vectorstore.'
+  //     });
+  //   }
+  // };
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -184,12 +181,12 @@ export default function IngestPage() {
               >
                 Check Status
               </button>
-              <button
+              {/* <button
                 onClick={clearVectorstore}
                 className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors"
               >
                 Clear All
-              </button>
+              </button> */}
             </div>
           </div>
         </div>
@@ -319,18 +316,17 @@ export default function IngestPage() {
                 <span className="text-blue-400 font-semibold">4.</span>
                 <span>Use "Check Status" to verify server health and vectorstore status.</span>
               </div>
-              <div className="flex items-start gap-3">
+              {/* <div className="flex items-start gap-3">
                 <span className="text-blue-400 font-semibold">5.</span>
                 <span>Use "Clear All" to remove all ingested documents from the database.</span>
-              </div>
+              </div> */}
             </div>
 
             <div className="mt-6 p-4 bg-yellow-600/20 border border-yellow-600/30 rounded-lg">
               <h4 className="font-semibold text-yellow-400 mb-2">Prerequisites:</h4>
               <ul className="text-sm text-zinc-300 space-y-1">
-                <li>• FastAPI server must be running on port 8000</li>
-                <li>• Ollama must be installed with models: nomic-embed-text, qwen3:0.6b</li>
-                <li>• Only DOCX files are supported for ingestion</li>
+                <li>• Server status must be healthy and ready</li>
+                <li>• Only DOCX, PDF, TXT and CSV files are supported for ingestion</li>
               </ul>
             </div>
           </div>
